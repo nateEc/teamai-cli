@@ -106,9 +106,13 @@ export async function deliverPr(job: DeliveryJob, gate: CreateGate): Promise<Del
   const { provider, repo } = origin;
   const ref: PullRequestRef = { repo, source: job.key.branch, target: job.target, timeoutMs: DELIVERY_TIMEOUT_MS };
   const found = await findOpen(origin, ref);
-  if (found.kind === 'found') return { ok: true, pr: found.pr };
   if (found.kind === 'failed') return failed({ kind: 'lookup_failed', provider: provider.name });
   if (found.kind === 'unsafe') return failed({ kind: 'unsafe_url', provider: provider.name });
+  // Lookup can take long enough for a sibling to push. Re-pick and check the new tip on a later drain.
+  const latest = await originTip(job.checkout, job.key.branch);
+  if (latest.kind === 'unreadable') return failed({ kind: 'branch_unreadable' });
+  if (latest.commit !== tip.commit) return 'busy';
+  if (found.kind === 'found') return { ok: true, pr: found.pr };
   const gated = await gate();
   if (gated === 'busy') return 'busy';
   if (gated === 'refused') return failed({ kind: 'withdrawn' });

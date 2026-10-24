@@ -236,6 +236,8 @@ steps:
 
 步骤成功时，驱动已经像对任何可写步骤一样推送了分支，步骤进入 `delivering` 状态，需要它的步骤会等待。下一次 `teamai workflow next`（无论哪个驱动调用）会查找从这条分支合入目标分支的已打开 pull request，没有时才新开一个。因崩溃而中断的运行，会找到之前开的 pull request，不会再开第二个。被另一台机器接管的运行也是如此，除非交出运行的机器此刻仍在开 pull request；GitHub 和 GitLab 会拒绝这样的重复请求。TeamAI 在 GitHub、GitLab、TGit 和 GitCode 的 origin 上开 pull request，使用 provider 的 CLI 或 token 已有的登录，从不弹出登录提示。在其他 origin 上（例如通用 Git 主机或 CNB），它不开 pull request，步骤失败并写明分支。
 
+如果同一分支上的另一步骤在查询期间推进分支，TeamAI 会在后续轮询中检查新记录的提交后再创建 pull request。已推送但仍在等待活跃写入步骤报告的提交会保持待交付状态。
+
 pull request 合入这条分支来源中最近一条已经交付过的分支，没有时合入运行开始时的分支。分支首先来自其 `for_each` item 的 `after` 分支，然后依次来自 `needs`。子工作流的第一个步骤来自运行它的步骤的 needs。跳过的步骤没有写分支，会被越过。因此每个 pull request 只显示它所合入的分支之后的工作。
 
 循环中 `workspace: new` 步骤的每个 pass 都有自己的 `/p<pass>` 分支，因此各开一个 pull request。之前的 pull request 保持打开，这是有意为之。在同一条 `continue` 分支上循环的步骤只有一个 pull request。

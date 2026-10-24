@@ -889,11 +889,13 @@ export interface NextOptions {
  * is looked up, whatever becomes of the step, rather than lost.
  */
 async function markCreating(config: LocalConfig, runId: string, job: DeliveryJob): Promise<'open' | 'refused' | 'busy'> {
-  const marked = await updateRun(config, runId, async (run): Promise<{ value: 'open' | 'refused'; write?: RunState }> => {
+  const marked = await updateRun(config, runId, async (run): Promise<{ value: 'open' | 'refused' | 'busy'; write?: RunState }> => {
     if (run === 'missing' || run.status !== 'running') return { value: 'refused' };
     const settledRun = reconcileRun(run);
     const step = 'unreadable' in settledRun || 'outcome' in settledRun ? undefined : deliveringStep(run, job.key);
     if (!step) return { value: 'refused' };
+    // A report may have advanced this shared branch while the provider lookup was pending.
+    if (run.copies?.[job.key.branch]?.commit !== job.recordedHead) return { value: 'busy' };
     const create = { ...job.key, target: job.target };
     const listed = run.creating?.find((item) => sameCreate(item, create));
     // A request listed before is asked again now, so its lookups count from this create.
@@ -938,7 +940,13 @@ async function drainDeliveries(config: LocalConfig, runId: string): Promise<void
         // As when the pick is busy: the step still delivers, and a later call delivers it.
         if (outcome === 'busy') return requeued;
         if (!outcome.ok && outcome.fault.kind === 'branch_ahead') waiting.push(job.key);
-        apply = (run) => completeDelivery(run, job, outcome, reconcileRun);
+        apply = (run) => completeDelivery(run, job, outcome, reconcileRun, run.steps.some((step) => {
+          if (step.status !== 'leased') return false;
+          const located = locateStep(run, step.id);
+          if (!located) return false;
+          const plan = planWorkspace(run, located.scope, step, located.step, { driver: step.lease.driver, base: run.base }, true);
+          return plan.mode !== 'read-only' && plan.contract?.branch === job.key.branch;
+        }));
       } else {
         const { create, checkout } = picked.value;
         tried.push(create);

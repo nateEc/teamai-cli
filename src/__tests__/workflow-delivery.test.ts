@@ -1054,6 +1054,31 @@ describe('retrying and cancelling a delivery', () => {
     expect(creates(gh)).toEqual([]);
   });
 
+  it.each([true, false])('rechecks a shared branch changed during lookup before creation (reported: %s)', async (reported) => {
+    const { config, root, runId } = await fixture(IMPL_AND_DOCS);
+    const impl = await take(config, runId);
+    await succeed(config, runId, impl, { to: pushWork(root, impl) });
+    const lock = deliveryLockPath(config, runId);
+    expect(await acquireLock(lock)).toBe(true);
+    const docs = await take(config, runId);
+    await releaseLock(lock);
+    let changed = false;
+    const create = providerDouble(async () => {
+      if (!changed) {
+        changed = true;
+        const to = pushOnto(root, docs.workspace!.branch, { '.github/workflows/ci.yml': 'on: push' });
+        if (reported) await succeed(config, runId, docs, { to });
+      }
+      return undefined;
+    }, async () => 'https://github.com/fixture/app/pull/1');
+    await leaseNext(config, runId, remote, { ...writable, running: [docs.attempt] });
+    expect(create).not.toHaveBeenCalled();
+    if (reported) {
+      await leaseNext(config, runId, remote, writable);
+      expect((await state(config, runId)).steps.find(step => step.id === 'work.impl')).toMatchObject({ status: 'failed', failure: { message: expect.stringContaining('protected paths') } });
+    }
+  });
+
   it('keeps a step delivering while origin\'s branch is ahead of what the run recorded, and delivers it once a report records that commit', async () => {
     const { config, root, runId } = await fixture(IMPL_AND_DOCS);
     const gh = fakeGh(path.join(root, 'gh'));
@@ -1066,7 +1091,9 @@ describe('retrying and cancelling a delivery', () => {
     const branch = docs.workspace?.branch ?? '';
     const ahead = pushOnto(root, branch, { 'docs.txt': 'docs' });
 
-    expect(await leaseNext(config, runId, remote, { ...writable, running: [docs.attempt] })).toMatchObject({ data: { wait: { delivering: ['work.impl'] } } });
+    for (let poll = 0; poll < 6; poll += 1) {
+      expect(await leaseNext(config, runId, remote, { ...writable, running: [docs.attempt] })).toMatchObject({ data: { wait: { delivering: ['work.impl'] } } });
+    }
     expect(creates(gh)).toEqual([]);
     await succeed(config, runId, docs, { to: ahead });
     expect(await leaseNext(config, runId, remote, writable)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
